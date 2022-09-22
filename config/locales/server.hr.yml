@@ -4,8 +4,4 @@
 # To work with us on translations, join this project:
 # https://translate.discourse.org/
 
-fi:
-  js:
-    login:
-      oauth2_basic:
-        name: "OAuth 2"
+hr:

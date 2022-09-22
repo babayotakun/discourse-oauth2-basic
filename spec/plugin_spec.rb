@@ -25,29 +25,6 @@ describe OAuth2BasicAuthenticator do
       expect(result.user).to eq(user)
     end
 
-    it 'updated user email if enabled' do
-      authenticator.stubs(:fetch_user_details).returns(email: user.email, user_id: 'id')
-
-      # Create association
-      result = authenticator.after_authenticate(auth)
-      expect(result.user).to eq(user)
-
-      # Change user email on remote system
-      old_email = user.email
-      authenticator.stubs(:fetch_user_details).returns(email: "newemail@example.com", user_id: 'id')
-
-      # Login again - no change
-      result = authenticator.after_authenticate(auth)
-      expect(result.user).to eq(user)
-      expect(result.user.email).to eq(old_email)
-
-      # Enable site setting
-      SiteSetting.oauth2_overrides_email = true
-      result = authenticator.after_authenticate(auth)
-      expect(result.user).to eq(user)
-      expect(result.user.email).to eq("newemail@example.com")
-    end
-
     it 'validates user email if provider has verified' do
       SiteSetting.oauth2_email_verified = false
       authenticator.stubs(:fetch_user_details).returns(email: user.email, email_verified: true)
@@ -55,18 +32,29 @@ describe OAuth2BasicAuthenticator do
       expect(result.email_valid).to eq(true)
     end
 
-    it 'doesnt validate user email if provider hasnt verified' do
+    it "doesn't validate user email if provider hasn't verified" do
       SiteSetting.oauth2_email_verified = false
       authenticator.stubs(:fetch_user_details).returns(email: user.email, email_verified: nil)
       result = authenticator.after_authenticate(auth)
       expect(result.email_valid).to eq(false)
     end
 
-    it 'doesnt affect the site setting' do
+    it "doesn't affect the site setting" do
       SiteSetting.oauth2_email_verified = true
       authenticator.stubs(:fetch_user_details).returns(email: user.email, email_verified: false)
       result = authenticator.after_authenticate(auth)
       expect(result.email_valid).to eq(true)
+    end
+
+    it 'handles true/false strings from identity provider' do
+      SiteSetting.oauth2_email_verified = false
+      authenticator.stubs(:fetch_user_details).returns(email: user.email, email_verified: 'true')
+      result = authenticator.after_authenticate(auth)
+      expect(result.email_valid).to eq(true)
+
+      authenticator.stubs(:fetch_user_details).returns(email: user.email, email_verified: 'false')
+      result = authenticator.after_authenticate(auth)
+      expect(result.email_valid).to eq(false)
     end
 
     context "fetch_user_details" do
@@ -110,6 +98,31 @@ describe OAuth2BasicAuthenticator do
         stub_request(:post, SiteSetting.oauth2_user_json_url).to_return(fail_response)
         result = authenticator.after_authenticate(auth)
         expect(result.failed).to eq(true)
+      end
+
+      describe 'fetch custom attributes' do
+        after { DiscoursePluginRegistry.reset_register!(:oauth2_basic_additional_json_paths) }
+
+        let(:response) do
+          {
+            status: 200,
+            body: '{"account":{"email":"newemail@example.com","custom_attr":"received"}}'
+          }
+        end
+
+        it 'stores custom attributes in the user associated account' do
+          custom_path = 'account.custom_attr'
+          DiscoursePluginRegistry.register_oauth2_basic_additional_json_path(
+            custom_path,
+            Plugin::Instance.new
+          )
+          stub_request(:get, SiteSetting.oauth2_user_json_url).to_return(response)
+
+          result = authenticator.after_authenticate(auth)
+          associated_account = UserAssociatedAccount.last
+
+          expect(associated_account.extra[custom_path]).to eq("received")
+        end
       end
     end
 
@@ -155,7 +168,7 @@ describe OAuth2BasicAuthenticator do
         }.to change { job_klass.jobs.count }.by(0)
 
         expect {
-          authenticator.after_create_account(user, auth_result.session_data)
+          authenticator.after_create_account(user, auth_result)
         }.to change { job_klass.jobs.count }.by(1)
 
         job_args = job_klass.jobs.last['args'].first
@@ -287,7 +300,7 @@ describe OAuth2BasicAuthenticator do
       expect(strategy.uid).to eq 'e028b1b918853eca7fba208a9d7e9d29a6e93c57'
     end
 
-    it 'can retrive user properties from access token callback' do
+    it 'can retrieve user properties from access token callback' do
       strategy.stubs(:access_token).returns(access_token)
       expect(strategy.info['name']).to eq 'Sammy the Shark'
       expect(strategy.info['email']).to eq 'sammy@digitalocean.com'
